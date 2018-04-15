@@ -36,6 +36,10 @@ double parm[15] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 
 String text = "";
 char mode[7] = "";
+char bufforp[15][10]={"","","","","","","","","","","","","","",""};
+
+int intention = 0;
+int p_intention = 0;
 
 //文字列を送信する関数
 void TransString(String txt){
@@ -48,11 +52,16 @@ void TransString(String txt){
 //文字列を受信する関数
 String ReceiveString(){
   String txt = "";
-
+  while(btSerial.available()){
+    delay(50);
+    char inputchar = btSerial.read();
+    txt = String(txt + inputchar);
+  }
   return txt;
 }
 
 //スイッチが押されたか確認する関数
+//スイッチが押されていると1,押されていなければ0
 int SwitchCheck(){
   if(digitalRead(Switch)==LOW){
     delay(50); //チャタリング防止
@@ -64,7 +73,7 @@ int SwitchCheck(){
 }
 
 //フォトリフレクタの値が閾値を超えているか確認する関数
-//閾値より大きい=黒、小さい=白
+//閾値より大きい=黒=1、小さい=白=0
 int Sensor(int pin){
   int v = analogRead(pin);
   if(v>thresh){
@@ -74,14 +83,251 @@ int Sensor(int pin){
   }
 }
 
+//フォトトランジスタの値からコースへの偏差を計算する関数
+int PhotoCheck(){
+  int right = Sensor(Sensor_r);
+  int center = Sensor(Sensor_c);
+  int left = Sensor(Sensor_l);
+  int sensor = 4 * left + 2 * center + 1 * right;
+
+  switch(sensor){
+    case 0:
+      return 10;
+      break;
+    case 1:
+      return -2;
+      break;
+    case 2:
+      return 0;
+      break;
+    case 3:
+      return -1;
+      break;
+    case 4:
+      return 2;
+      break;
+    case 5:
+      return 7;
+      break;
+    case 6:
+      return 1;
+      break;
+    case 7:
+      return 100;
+      break;
+  }
+}
+
 //ONOFF制御実行関数
-void ONOFFexe(){
+void ONOFFexe(double* Ks){
+  //開始時刻
+  unsigned long stime = millis();
+  //左右のprm
+  int l_prm = 0;
+  int r_prm = 0;
+  //スピード
+  double def_spped = Ks[0];
+  
+  digitalWrite(motorR1,HIGH);
+  digitalWrite(motorR2,LOW);
+  digitalWrite(motorL1,HIGH);
+  digitalWrite(motorL2,LOW);
+
+  int check = 0;
+  //
+  while(1){
+    //スイッチ押すと強制終了
+    if(SwitchCheck()){
+      digitalWrite(motorR1,LOW);
+      digitalWrite(motorR2,LOW);
+      digitalWrite(motorL1,LOW);
+      digitalWrite(motorL2,LOW);
+      delay(50);
+      break;
+    }
+    //センサ値を格納
+    p_intention = intention;
+    intention = PhotoCheck();
+
+    switch(intention){
+      case 100://ゴール
+        //経過時間を返す
+        unsigned long etime = millis();
+        long resultms = etime - stime;
+        long results = result / 1000;
+        resultms = resultms % 1000;
+        long resultm = results / 60;
+        results = results % 60;
+        char result[30];
+        sprintf(result,"0:%ld:%ld.%03d",resultm,results,resultms);
+        TransString(result);
+        
+        //タイヤを止める
+        digitalWrite(motorR1,LOW);
+        digitalWrite(motorR2,LOW);
+        digitalWrite(motorL1,LOW);
+        digitalWrite(motorL2,LOW);
+        delay(50);
+        check = 1;
+        break;
+
+      case 10://□□□ コースアウト Ks1,2
+        r_pwm = int(def_spped * Ks[1] / 100.0);
+        l_pwm = int(def_speed * Ks[2] / 100.0);
+        break;
+      case -2://□□■Ks3,4
+        r_pwm = int(def_spped * Ks[3] / 100.0);
+        l_pwm = int(def_speed * Ks[4] / 100.0);
+        break;
+      case -1://□■■Ks9,10
+        r_pwm = int(def_spped * Ks[9] / 100.0);
+        l_pwm = int(def_speed * Ks[10] / 100.0);
+        break;
+      case 0://□■□Ks5,6
+        r_pwm = int(def_spped * Ks[5] / 100.0);
+        l_pwm = int(def_speed * Ks[6] / 100.0);
+        break;
+      case 1://■■□Ks13,14
+        r_pwm = int(def_spped * Ks[13] / 100.0);
+        l_pwm = int(def_speed * Ks[14] / 100.0);
+        break;
+      case 2://■□□Ks7,8
+        r_pwm = int(def_spped * Ks[7] / 100.0);
+        l_pwm = int(def_speed * Ks[8] / 100.0);        
+        break;
+      case 7://■□■Ks11,12
+        r_pwm = int(def_spped * Ks[11] / 100.0);
+        l_pwm = int(def_speed * Ks[12] / 100.0);
+        break;
+      default:
+        r_pwm = 0;
+        l_pwm = 0;
+        break;
+    }
+    
+    if(check){
+      break;//終了
+    }else{
+      if(l_prm>=0){
+        digitalWrite(motorL1,HIGH);
+        digitalWrite(motorL2,LOW);
+        analogWrite(motorLpwm,l_prm);
+      }else{
+        digitalWrite(motorL1,LOW);
+        digitalWrite(motorL2,HIGH);
+        analogWrite(motorLpwm,-l_prm);
+      }
+      if(r_prm>=0){
+        digitalWrite(motorR1,HIGH);
+        digitalWrite(motorR2,LOW);
+        analogWrite(motorRpwm,r_prm);
+      }else{
+        digitalWrite(motorR1,LOW);
+        digitalWrite(motorR2,HIGH);
+        analogWrite(motorRpwm,-r_prm);
+      }
+      delay(100);
+    }
+  }
   
 }
 
 //PID制御実行関数
-void PIDexe(){
-  
+void PIDexe(double* Ks){
+  //開始時刻
+  unsigned long stime = millis();
+  //左右のprm
+  int l_prm = 0;
+  int r_prm = 0;
+  //Ks0-speed Ks1-P Ks2-I Ks3-D
+  double def_spped = Ks[0];
+  double Kp = Ks[1];
+  double Ki = Ks[2];
+  double Kd = Ks[3];
+  digitalWrite(motorR1,HIGH);
+  digitalWrite(motorR2,LOW);
+  digitalWrite(motorL1,HIGH);
+  digitalWrite(motorL2,LOW);
+
+  int check = 0;
+  while(1){
+    //スイッチ押すと強制終了
+    if(SwitchCheck()){
+      digitalWrite(motorR1,LOW);
+      digitalWrite(motorR2,LOW);
+      digitalWrite(motorL1,LOW);
+      digitalWrite(motorL2,LOW);
+      delay(50);
+      break;
+    }
+    
+    //センサ値格納;
+    p_intention = intention;
+    intention = PhotoCheck();
+
+    if(intention == 7){
+      intention = 0;
+    }
+    if(((p_intention == 1) || (p_intention == 2) || (p_intention == 3)) && (intention == 10)){
+      intention = 3;
+    }
+    if(((p_intention == -1) || (p_intention == -2) || (p_intention == -3)) && (intention == 10)){
+      intention = -3;
+    }
+    if(intention == 10){
+      intention = 0;
+    }
+
+    if(intention == 100){//ゴール  
+        //経過時間を返す
+        unsigned long etime = millis();
+        long resultms = etime - stime;
+        long results = result / 1000;
+        resultms = resultms % 1000;
+        long resultm = results / 60;
+        results = results % 60;
+        char result[30];
+        sprintf(result,"0:%ld:%ld.%03d",resultm,results,resultms);
+        TransString(result);
+        
+        //タイヤを止める
+        digitalWrite(motorR1,LOW);
+        digitalWrite(motorR2,LOW);
+        digitalWrite(motorL1,LOW);
+        digitalWrite(motorL2,LOW);
+        delay(50);
+        check = 1;
+        break;
+    }else{//ゴールしてない
+      before = now;
+      now = millis();
+      double P = intention;
+      double I = intention + p_intention;
+      double D = intention - p_intention;
+      double gain = Kp * P + Ki * I + Kd * D;
+      int r_gain,l_gain;
+      if(gain >= 0){
+        r_gain = int(def_speed);
+        l_gain = int(def_speed - gain);
+      }else{
+        r_gain = int(def_speed + gain);
+        l_gain = int(def_speed);
+      }
+      if(r_gain < 0){
+        r_gain = 0;  
+      }
+      if(l_gain < 0){
+        l_gain = 0;
+      }
+    }
+    digitalWrite(motorR1,HIGH);
+    digitalWrite(motorR2,LOW);
+    digitalWrite(motorL1,HIGH);
+    digitalWrite(motorL2,LOW);
+    analogWrite(motorRpwm,r_gain);
+    analogWrite(motorLpwm,l_gain);
+    delay(100);
+  }
 }
 
 void setup() {
@@ -116,16 +362,31 @@ void loop() {
         char str[128] = "";
         strcpy(str,text.c_str());
         int i;
-
         state = 2;
+        for(i = 0; i < 7; i++){
+          mode[i] = 0;
+        }
+        if(text.charAt(0) == 'O'){
+          sscanf(str,"%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",mode,bufforp[0],bufforp[1],bufforp[2],bufforp[3],bufforp[4],bufforp[5],bufforp[6],bufforp[7],bufforp[8],bufforp[9],bufforp[10],bufforp[11],bufforp[12],bufforp[13],bufforp[14]);
+         for(i=0;i<15;i++){
+          param[i]=atof(bufforp[i]);
+         }
+        }else if(text.charAt(0) == 'P'){
+          sscanf(str,"%s%s%s%s%s",mode,bufforp[0],bufforp[1],bufforp[2],bufforp[3]);
+          for(i=0;i<4;i++){
+            param[i]=atof(bufforp[i]);
+          }
+        }
+        delay(1000);
+        TransString(String("Success"));
       }
       break;
-    case 2://実行
+    case 2://実行　//TODO
       delay(1000);
-      if(mode){
-        ONOFFexe();
-      }else if(mode){
-        PIDexe();
+      if(strncmp(mode,"ON-OFF",6)){
+        ONOFFexe(param);
+      }else if(strncmp(mode,"PID",3)){
+        PIDexe(param);
       }
       state = 0
       break;
